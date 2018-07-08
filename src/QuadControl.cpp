@@ -70,14 +70,25 @@ VehicleCommand QuadControl::GenerateMotorCommands(float collThrustCmd, V3F momen
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
 
-  cmd.desiredThrustsN[0] = mass * 9.81f / 4.f; // front left
-  cmd.desiredThrustsN[1] = mass * 9.81f / 4.f; // front right
-  cmd.desiredThrustsN[2] = mass * 9.81f / 4.f; // rear left
-  cmd.desiredThrustsN[3] = mass * 9.81f / 4.f; // rear right
+    float l = L / sqrt(2.f);
+
+    // Find the X, Y, Z force components
+    float xForce = momentCmd.x / l;
+    float yForce = momentCmd.y / l;
+    float zForce = - momentCmd.z / kappa;
+
+    // Divide each of the components by the 4 rotors
+    float divisionOfPowerPerMotor = 1.0/4.0;
+
+    // Find the thrust per rotor per the equation in Lesson 14, part 21, ex 1
+    cmd.desiredThrustsN[0] = (collThrustCmd + xForce + yForce + zForce) * divisionOfPowerPerMotor; // front left
+    cmd.desiredThrustsN[1] = (collThrustCmd - xForce + yForce - zForce) * divisionOfPowerPerMotor; // front right
+    cmd.desiredThrustsN[2] = (collThrustCmd + xForce - yForce - zForce) * divisionOfPowerPerMotor; // rear left
+    cmd.desiredThrustsN[3] = (collThrustCmd - xForce - yForce + zForce) * divisionOfPowerPerMotor; // rear right
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
-  return cmd;
+    return cmd;
 }
 
 V3F QuadControl::BodyRateControl(V3F pqrCmd, V3F pqr)
@@ -97,9 +108,16 @@ V3F QuadControl::BodyRateControl(V3F pqrCmd, V3F pqr)
   V3F momentCmd;
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
-  
-
+    
+    // Find the diff of the desired body rate and the current rate and multiply by the gain
+    V3F bodyRateDiff = (pqrCmd - pqr);
+    V3F bodyRateInclGain = bodyRateDiff * kpPQR;
+    
+    // Find the moments by including the moment of inertia for that plane
+    momentCmd.x = bodyRateInclGain.x * Ixx;
+    momentCmd.y = bodyRateInclGain.y * Iyy;
+    momentCmd.z = bodyRateInclGain.z * Izz;
+    
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
   return momentCmd;
@@ -128,8 +146,27 @@ V3F QuadControl::RollPitchControl(V3F accelCmd, Quaternion<float> attitude, floa
   Mat3x3F R = attitude.RotationMatrix_IwrtB();
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
+    
+    // Calculate acceleration
+    float accel = -(collThrustCmd / mass);
 
 
+    // Calculate the roll commanded, subtract the current roll, and multiply by the gain
+    float rollCommanded = accelCmd.x / accel;
+    float rollDiff = rollCommanded - R(0,2);
+    float rollInclGain = kpBank * rollDiff;
+
+    // Calculate the pitch commanded, subtract the current roll, and multiply by the gain
+    float pitchCommanded = accelCmd.y / accel;
+    float pitchDiff = pitchCommanded - R(1,2);
+    float pitchInclGain = kpBank * pitchDiff;
+
+    // Calculate the roll and pitch commands using the equation described in lesson 14, part 21, ex. 4.2
+    pqrCmd.x = (rollInclGain * R(1,0) - (pitchInclGain * R(0,0))) / R(2,2);
+    pqrCmd.y = (rollInclGain * R(1,1) - (pitchInclGain * R(0,1))) / R(2,2);
+    
+    // There is no z component!
+    pqrCmd.z = 0.0;
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
@@ -160,8 +197,36 @@ float QuadControl::AltitudeControl(float posZCmd, float velZCmd, float posZ, flo
   float thrust = 0;
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
-
+    
+    // Find the vertical position differential and times by gain.
+    float vertPosDiff = posZCmd - posZ;
+    float vertPosInclGain = kpPosZ * vertPosDiff;
+    
+    // Increase the altitude error by the difference time the change in time
+    integratedAltitudeError += vertPosDiff * dt;
+    
+    // Find the integrated error
+    float vertIntegratedError = KiPosZ * integratedAltitudeError;
+    
+    // Find the vertical velocity differential and times by gain.
+    float vertVelDiff = velZCmd - velZ;
+    float vertVelInclGain = kpVelZ * vertVelDiff;
+    
+    // Find the desired vertical rate
+    float vertRate = (vertPosInclGain + vertVelInclGain + vertIntegratedError + accelZCmd - CONST_GRAVITY) / R(2,2);
+    
+    // Check the vertical rate against the maximum and minimum rates over a given time
+    if (vertRate > (maxAscentRate/ dt))
+    {
+        vertRate = maxAscentRate;
+    }
+    else if (vertRate < (-maxDescentRate/ dt))
+    {
+        vertRate = maxDescentRate;
+    }
+    
+    // Invert the rate because the z axis points down and times by mass for thrust
+    thrust = - vertRate * mass;
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
   
@@ -198,8 +263,63 @@ V3F QuadControl::LateralPositionControl(V3F posCmd, V3F velCmd, V3F pos, V3F vel
   V3F accelCmd = accelCmdFF;
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
+    
+    // Check the commanded x and y velocities against the max values. Reset them to the max/min if needed
+    if (velCmd.x < -maxSpeedXY)
+    {
+        velCmd.x = -maxSpeedXY;
+    }
+    else if (velCmd.x > maxSpeedXY)
+    {
+        velCmd.x = maxSpeedXY;
+    }
+    
+    if (velCmd.y < -maxSpeedXY)
+    {
+        velCmd.y = -maxSpeedXY;
+    }
+    else if (velCmd.y > maxSpeedXY)
+    {
+        velCmd.y = maxSpeedXY;
+    }
+    
+    // Find the x,y position diff and times by gain
+    V3F posDiff = posCmd - pos;
+    V3F posInclGain = kpPosXY * posDiff;
 
+    // Find the x,y velocity diff and times by gain
+    V3F velDiff = velCmd - vel;
+    V3F velInclGain = kpVelXY * velDiff;
+
+    // Find the desired acceleration
+    V3F desiredAccel = posInclGain + velInclGain + accelCmd;
+    
+    // Check the desired x and y accelerations against the max values. Reset them to the max/min if needed
+    if (desiredAccel.x < -maxAccelXY)
+    {
+        accelCmd.x = -maxAccelXY;
+    }
+    else if (desiredAccel.x > maxAccelXY)
+    {
+        accelCmd.x = maxAccelXY;
+    }
+    else
+    {
+        accelCmd.x = desiredAccel.x;
+    }
   
+    if (desiredAccel.y < -maxAccelXY)
+    {
+        accelCmd.y = -maxAccelXY;
+    }
+    else if (desiredAccel.y > maxAccelXY)
+    {
+        accelCmd.y = maxAccelXY;
+    }
+    else
+    {
+        accelCmd.y = desiredAccel.y;
+    }
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
@@ -221,8 +341,11 @@ float QuadControl::YawControl(float yawCmd, float yaw)
 
   float yawRateCmd=0;
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
-
+    // Find the x,y rate diff and times by gain
+    float yawRateDiff = yawCmd - yaw;
+    
+    yawRateCmd = kpYaw * yawRateDiff;
+    
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
   return yawRateCmd;
