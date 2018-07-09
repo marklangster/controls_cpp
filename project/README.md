@@ -32,7 +32,7 @@ I found the desired thrust (the total output of all 4 rotors)  by  comparing the
 
 ![Thrust Controller](images/thrust_controller.png)
 
-Finally, the position control gains and velocity control agins were adujested.
+Finally, the position control gains and velocity control agins were adjusted.
 
 ## Scenario 4 + 5
 Further refinements of the control parameters to match expected behavior.
